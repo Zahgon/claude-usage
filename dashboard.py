@@ -13,112 +13,7 @@ DB_PATH = Path.home() / ".claude" / "usage.db"
 
 
 def get_dashboard_data(db_path=DB_PATH):
-    if not db_path.exists():
-        return {"error": "Database not found. Run: python cli.py scan"}
-
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-
-    # ── All models (for filter UI) ────────────────────────────────────────────
-    model_rows = conn.execute("""
-        SELECT COALESCE(model, 'unknown') as model
-        FROM turns
-        GROUP BY model
-        ORDER BY SUM(input_tokens + output_tokens) DESC
-    """).fetchall()
-    all_models = [r["model"] for r in model_rows]
-
-    # ── Daily per-model, ALL history (client filters by range) ────────────────
-    daily_rows = conn.execute("""
-        SELECT
-            substr(timestamp, 1, 10)   as day,
-            COALESCE(model, 'unknown') as model,
-            SUM(input_tokens)          as input,
-            SUM(output_tokens)         as output,
-            SUM(cache_read_tokens)     as cache_read,
-            SUM(cache_creation_tokens) as cache_creation,
-            COUNT(*)                   as turns
-        FROM turns
-        GROUP BY day, model
-        ORDER BY day, model
-    """).fetchall()
-
-    daily_by_model = [{
-        "day":            r["day"],
-        "model":          r["model"],
-        "input":          r["input"] or 0,
-        "output":         r["output"] or 0,
-        "cache_read":     r["cache_read"] or 0,
-        "cache_creation": r["cache_creation"] or 0,
-        "turns":          r["turns"] or 0,
-    } for r in daily_rows]
-
-    # ── Hourly per-day per-model (client filters by range + TZ-shifts) ────────
-    # Timestamps are ISO8601 UTC (e.g. "2026-04-08T09:30:00Z"); chars 12-13 = hour.
-    hourly_rows = conn.execute("""
-        SELECT
-            substr(timestamp, 1, 10)                  as day,
-            CAST(substr(timestamp, 12, 2) AS INTEGER) as hour,
-            COALESCE(model, 'unknown')                as model,
-            SUM(output_tokens)                        as output,
-            COUNT(*)                                  as turns
-        FROM turns
-        WHERE timestamp IS NOT NULL AND length(timestamp) >= 13
-        GROUP BY day, hour, model
-        ORDER BY day, hour, model
-    """).fetchall()
-
-    hourly_by_model = [{
-        "day":    r["day"],
-        "hour":   r["hour"] if r["hour"] is not None else 0,
-        "model":  r["model"],
-        "output": r["output"] or 0,
-        "turns":  r["turns"] or 0,
-    } for r in hourly_rows]
-
-    # ── All sessions (client filters by range and model) ──────────────────────
-    session_rows = conn.execute("""
-        SELECT
-            session_id, project_name, first_timestamp, last_timestamp,
-            total_input_tokens, total_output_tokens,
-            total_cache_read, total_cache_creation, model, turn_count,
-            git_branch
-        FROM sessions
-        ORDER BY last_timestamp DESC
-    """).fetchall()
-
-    sessions_all = []
-    for r in session_rows:
-        try:
-            t1 = datetime.fromisoformat(r["first_timestamp"].replace("Z", "+00:00"))
-            t2 = datetime.fromisoformat(r["last_timestamp"].replace("Z", "+00:00"))
-            duration_min = round((t2 - t1).total_seconds() / 60, 1)
-        except Exception:
-            duration_min = 0
-        sessions_all.append({
-            "session_id":    r["session_id"][:8],
-            "project":       r["project_name"] or "unknown",
-            "branch":        r["git_branch"] or "",
-            "last":          (r["last_timestamp"] or "")[:16].replace("T", " "),
-            "last_date":     (r["last_timestamp"] or "")[:10],
-            "duration_min":  duration_min,
-            "model":         r["model"] or "unknown",
-            "turns":         r["turn_count"] or 0,
-            "input":         r["total_input_tokens"] or 0,
-            "output":        r["total_output_tokens"] or 0,
-            "cache_read":    r["total_cache_read"] or 0,
-            "cache_creation": r["total_cache_creation"] or 0,
-        })
-
-    conn.close()
-
-    return {
-        "all_models":      all_models,
-        "daily_by_model":  daily_by_model,
-        "hourly_by_model": hourly_by_model,
-        "sessions_all":    sessions_all,
-        "generated_at":    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
+    pass
 
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -1242,61 +1137,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(HTML_TEMPLATE.encode("utf-8"))
-
-        elif self.path == "/api/data":
-            data = get_dashboard_data()
-            body = json.dumps(data).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        else:
-            self.send_response(404)
-            self.end_headers()
+        pass
 
     def do_POST(self):
-        if self.path == "/api/rescan":
-            # Full rebuild: delete DB and rescan from scratch.
-            # Pass DB_PATH / DEFAULT_PROJECTS_DIRS explicitly so tests that
-            # patch the module globals are honored (scan's defaults are
-            # frozen at def time and would otherwise target the real paths).
-            import scanner
-            db_path = DB_PATH
-            if db_path.exists():
-                db_path.unlink()
-            result = scanner.scan(
-                db_path=db_path,
-                projects_dirs=scanner.DEFAULT_PROJECTS_DIRS,
-                verbose=False,
-            )
-            body = json.dumps(result).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        else:
-            self.send_response(404)
-            self.end_headers()
+        pass
 
 
 def serve(host=None, port=None):
-    host = host or os.environ.get("HOST", "localhost")
-    port = port or int(os.environ.get("PORT", "8080"))
-    server = HTTPServer((host, port), DashboardHandler)
-    print(f"Dashboard running at http://{host}:{port}")
-    print("Press Ctrl+C to stop.")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nStopped.")
+    pass
 
 
 if __name__ == "__main__":
